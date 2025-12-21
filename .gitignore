@@ -1,0 +1,21 @@
+# IntelliJ
+.idea/
+*.iml
+*.iws
+*.ipr
+out/
+
+# Maven
+target/
+
+# Data / logs
+data/
+logs/
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local Hadoop helper (you may put winutils.exe here)
+!hadoop/bin/.gitkeep

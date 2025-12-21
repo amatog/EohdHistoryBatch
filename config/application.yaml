@@ -1,0 +1,21 @@
+eodhd:
+  apiKey: "693befd567daf7.42846287"
+  baseUrl: "https://eodhd.com/api/eod"
+  from: "2015-12-21"
+  to: "2025-12-21"
+  period: "d"
+  fmt: "json"
+
+symbols:
+  jsonFile: "./config/symbols.json"
+  placeWhitelist: ["NASDAQ", "NYSE"]
+
+output:
+  dir: "./data/prices"
+  compression: "SNAPPY"   # SNAPPY or GZIP
+
+runtime:
+  httpTimeoutSeconds: 30
+  retries: 5
+  retryBackoffMillis: 1500
+  minDelayBetweenRequestsMillis: 250
