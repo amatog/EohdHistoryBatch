@@ -6,20 +6,40 @@ import java.util.List;
 import java.util.ArrayList;
 
 
+
+
 public class Main {
 
     public static void main(String[] args) throws Exception {
         ensureWindowsHadoopHome();
 
         String configPath = "./config/application.yaml";
+        String mode = "ingest";   // default
+        String ref = "SPY";       // default reference symbol for validate
+
         for (int i = 0; i < args.length; i++) {
             if ("--config".equals(args[i]) && i + 1 < args.length) {
                 configPath = args[i + 1];
+                            } else if ("--mode".equals(args[i]) && i + 1 < args.length) {
+                                mode = args[i + 1];
+                            } else if ("--ref".equals(args[i]) && i + 1 < args.length) {
+                                ref = args[i + 1];
             }
         }
 
         AppConfig cfg = ConfigLoader.load(Path.of(configPath));
         List<String> symbols = ConfigLoader.loadSymbols(cfg);
+
+        // ---- MODE SWITCH ----------------------------------------------------
+                if ("validate".equalsIgnoreCase(mode)) {
+                        // Writes CSV into cfg.output.dir (same root as ParquetStore)
+                                TimeseriesCoverageValidator.runFromConfig(cfg, ref, "validation_coverage_report.csv");
+                        return;
+                    }
+                if (!"ingest".equalsIgnoreCase(mode)) {
+                        throw new IllegalArgumentException("Unknown --mode=" + mode + " (allowed: ingest, validate)");
+                    }
+                // ---------------------------------------------------------------------
 
         System.out.println("[BOOT] symbols=" + symbols.size()
                 + " from=" + cfg.eodhd.from
@@ -61,6 +81,8 @@ public class Main {
             System.out.println("[DONE] all ok");
         }
     }
+
+
 
 
     private static void ensureWindowsHadoopHome() {

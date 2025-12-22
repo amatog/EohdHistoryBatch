@@ -11,7 +11,7 @@ symbols:
   placeWhitelist: ["NASDAQ", "NYSE"]
 
 output:
-  dir: "./data/prices"
+  dir: "C:\\projects\\ValueServices\\data"
   compression: "SNAPPY"   # SNAPPY or GZIP
 
 runtime:

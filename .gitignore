@@ -4,6 +4,7 @@
 *.iws
 *.ipr
 out/
+config/application.yaml
 
 # Maven
 target/
