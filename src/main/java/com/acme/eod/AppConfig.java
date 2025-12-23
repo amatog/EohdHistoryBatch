@@ -18,13 +18,25 @@ public class AppConfig {
     }
 
     public static class Symbols {
+        /** Inline symbols list (optional). */
+        public List<String> list;
+
+        /** Symbols JSON file path (preferred key name). */
+        public String file;
+
+        /** Symbols JSON file path (legacy/alias key name used in your YAML). */
         public String jsonFile;
+
+        /** Optional whitelist for "place" field in JSON entries. */
         public List<String> placeWhitelist;
     }
 
     public static class Output {
         public String dir;
+        public String primaryDir = "data_primary";
+        public String symbolDir = "data_by_symbol";
         public String compression = "SNAPPY";
+        public int expectedSymbols = 0;
     }
 
     public static class Runtime {
