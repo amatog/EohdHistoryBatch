@@ -7,6 +7,8 @@ import org.apache.avro.generic.GenericRecord;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.Path;
 import org.apache.parquet.avro.AvroParquetWriter;
+import org.apache.parquet.avro.AvroParquetReader;
+import org.apache.parquet.hadoop.ParquetReader;
 import org.apache.parquet.hadoop.ParquetWriter;
 import org.apache.parquet.hadoop.metadata.CompressionCodecName;
 
@@ -66,7 +68,17 @@ public class ParquetStore {
             System.out.println("[STORE] date=" + date + " rows=" + dayRows.size()
                     + " -> " + outFile.toAbsolutePath());
 
-            writeParquet(outFile, dayRows);
+            try (java.nio.channels.FileChannel channel = java.nio.channels.FileChannel.open(
+                    outDir.resolve(".ingest.lock"), java.nio.file.StandardOpenOption.CREATE,
+                    java.nio.file.StandardOpenOption.WRITE);
+                 java.nio.channels.FileLock lock = channel.tryLock()) {
+                if (lock == null) throw new IOException("Partition is being written: " + date);
+                // Merge by symbol so retrying a subset does not discard existing bars.
+                Map<String, PriceRow> merged = new TreeMap<>();
+                for (PriceRow row : readParquet(outFile)) merged.put(row.symbol, row);
+                for (PriceRow row : dayRows) merged.put(row.symbol, row);
+                writeParquet(outFile, new ArrayList<>(merged.values()));
+            }
         }
     }
 
@@ -79,9 +91,11 @@ public class ParquetStore {
         CompressionCodecName codec = parseCodec(cfg.output.compression);
 
         Configuration hadoopConf = new Configuration();
-        Path hadoopPath = new Path(file.toUri());
+        java.nio.file.Path temporary = file.resolveSibling("." + file.getFileName() + "." + UUID.randomUUID() + ".tmp");
 
-        try (ParquetWriter<GenericRecord> writer = AvroParquetWriter.<GenericRecord>builder(hadoopPath)
+        try {
+        try (ParquetWriter<GenericRecord> writer = AvroParquetWriter.<GenericRecord>builder(
+                new org.apache.parquet.io.LocalOutputFile(temporary))
                 .withSchema(PRICE_SCHEMA)
                 .withCompressionCodec(codec)
                 .withConf(hadoopConf)
@@ -103,6 +117,34 @@ public class ParquetStore {
                 writer.write(gr);
             }
         }
+        Files.move(temporary, file, java.nio.file.StandardCopyOption.ATOMIC_MOVE,
+                java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+        } finally {
+            Files.deleteIfExists(temporary);
+        }
+    }
+
+    private List<PriceRow> readParquet(java.nio.file.Path file) throws IOException {
+        List<PriceRow> rows = new ArrayList<>();
+        if (!Files.exists(file)) return rows;
+        try (ParquetReader<GenericRecord> reader = AvroParquetReader.<GenericRecord>builder(
+                new org.apache.parquet.io.LocalInputFile(file)).withConf(new Configuration()).build()) {
+            GenericRecord record;
+            while ((record = reader.read()) != null) {
+                PriceRow row = new PriceRow();
+                row.date = java.time.LocalDate.parse(record.get("date").toString());
+                row.symbol = record.get("symbol").toString();
+                row.open = ((Number) record.get("open")).doubleValue();
+                row.high = ((Number) record.get("high")).doubleValue();
+                row.low = ((Number) record.get("low")).doubleValue();
+                row.close = ((Number) record.get("close")).doubleValue();
+                row.adjustedClose = ((Number) record.get("adjusted_close")).doubleValue();
+                row.volume = ((Number) record.get("volume")).longValue();
+                row.source = record.get("source") == null ? "EODHD" : record.get("source").toString();
+                rows.add(row);
+            }
+        }
+        return rows;
     }
 
     public static CompressionCodecName parseCodec(String s) {

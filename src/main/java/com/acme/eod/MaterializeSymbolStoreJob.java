@@ -56,6 +56,45 @@ public class MaterializeSymbolStoreJob {
         Objects.requireNonNull(args, "args");
         Objects.requireNonNull(args.primaryRoot, "args.primaryRoot");
         Objects.requireNonNull(args.symbolRoot, "args.symbolRoot");
+        Path source = args.primaryRoot.toAbsolutePath().normalize().toRealPath();
+        Path target = args.symbolRoot.toAbsolutePath().normalize();
+        Files.createDirectories(target.getParent());
+        target = target.getParent().toRealPath().resolve(target.getFileName());
+        if (Files.exists(target)) target = target.toRealPath();
+        if (source.startsWith(target) || target.startsWith(source)) {
+            throw new IllegalArgumentException("Primary and symbol stores must not overlap");
+        }
+        Path lockPath = target.resolveSibling(target.getFileName() + ".lock");
+        try (java.nio.channels.FileChannel channel = java.nio.channels.FileChannel.open(lockPath,
+                StandardOpenOption.CREATE, StandardOpenOption.WRITE);
+             java.nio.channels.FileLock lock = channel.tryLock()) {
+            if (lock == null) throw new IllegalStateException("Materialization is already running");
+            if (args.mode == Mode.FULL_REBUILD) {
+                if (args.dateFrom != null || args.dateTo != null)
+                    throw new IllegalArgumentException("FULL_REBUILD must include the entire primary store");
+                Path staged = target.resolveSibling(target.getFileName() + ".staging-" + UUID.randomUUID());
+                Args copy = new Args();
+                copy.primaryRoot = source;
+                copy.symbolRoot = staged;
+                copy.compression = args.compression;
+                copy.expectedSymbols = args.expectedSymbols;
+                runStore(copy);
+                Path backup = target.resolveSibling(target.getFileName() + ".backup-" + UUID.randomUUID());
+                boolean hadTarget = Files.exists(target);
+                if (hadTarget) Files.move(target, backup, StandardCopyOption.ATOMIC_MOVE);
+                try {
+                    Files.move(staged, target, StandardCopyOption.ATOMIC_MOVE);
+                } catch (Exception ex) {
+                    if (hadTarget) Files.move(backup, target, StandardCopyOption.ATOMIC_MOVE);
+                    throw ex;
+                }
+                return;
+            }
+            runStore(args);
+        }
+    }
+
+    private void runStore(Args args) throws Exception {
 
         String runId = "a2_" + Instant.now().toString().replace(":", "").replace("-", "").replace(".", "");
         Path stateFile = args.symbolRoot.resolve("_state").resolve("materialize_state.json");
@@ -65,10 +104,6 @@ public class MaterializeSymbolStoreJob {
         ObjectMapper om = new ObjectMapper();
 
         State st = loadState(om, stateFile);
-        if (args.mode == Mode.FULL_REBUILD) {
-            // We reset state; you may delete symbolRoot content manually if desired.
-            st = new State();
-        }
 
         List<LocalDate> available = discoverDatePartitions(args.primaryRoot);
         if (available.isEmpty()) {
@@ -166,6 +201,7 @@ public class MaterializeSymbolStoreJob {
 
             totalRows += rowsThisDate;
             st.processedDates.add(date.toString());
+            saveState(om, stateFile, st);
 
             System.out.println("[A2] processed date=" + date
                     + " rows=" + rowsThisDate
@@ -202,8 +238,8 @@ public class MaterializeSymbolStoreJob {
         long rows = 0;
         Configuration conf = new Configuration();
 
-        org.apache.hadoop.fs.Path hp = new org.apache.hadoop.fs.Path(parquetFile.toUri());
-        try (ParquetReader<GenericRecord> reader = AvroParquetReader.<GenericRecord>builder(hp).withConf(conf).build()) {
+        try (ParquetReader<GenericRecord> reader = AvroParquetReader.<GenericRecord>builder(
+                new org.apache.parquet.io.LocalInputFile(parquetFile)).withConf(conf).build()) {
 
             GenericRecord r;
             while ((r = reader.read()) != null) {
@@ -337,7 +373,13 @@ public class MaterializeSymbolStoreJob {
 
     private static void saveState(ObjectMapper om, Path stateFile, State st) throws IOException {
         Files.createDirectories(stateFile.getParent());
-        om.writerWithDefaultPrettyPrinter().writeValue(stateFile.toFile(), st);
+        Path temporary = stateFile.resolveSibling(stateFile.getFileName() + "." + UUID.randomUUID() + ".tmp");
+        try {
+            om.writerWithDefaultPrettyPrinter().writeValue(temporary.toFile(), st);
+            Files.move(temporary, stateFile, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+        } finally {
+            Files.deleteIfExists(temporary);
+        }
     }
 
     private static void writeAudit(ObjectMapper om, Path auditFile, Map<String, Object> payload) throws IOException {
